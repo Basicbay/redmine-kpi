@@ -10,7 +10,7 @@ class RedmineError extends Error {
 }
 
 export async function request<T>(path: string, accessKey?: string, options: { fresh?: boolean } = {}): Promise<T> {
-  const url = process.env.REDMINE_URL;
+  const url = process.env.REDMINE_URL?.trim();
   const key = accessKey?.trim();
   if (!key) throw new Error("กรุณากรอก API key ของบุคคลที่ต้องการดู");
   if (!url) throw new Error("กรุณาตั้งค่า REDMINE_URL ใน .env.local");
