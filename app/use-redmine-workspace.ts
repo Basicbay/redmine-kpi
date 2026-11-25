@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { PERIOD_START, PERIOD_END } from "@/lib/assessment";
 import { ACCOUNTS_STORAGE, LEGACY_KEY_STORAGE, emptyAccounts, parseAccounts, type AccountStore, type SavedAccount } from "@/lib/saved-accounts";
 import { loadPerson, loadWorkspace } from "./actions";
@@ -12,6 +13,7 @@ type Source = { account: SavedAccount; directory: Directory };
 const viewKey = (key: string, id: number, start: string, end: string) => JSON.stringify([key, id, start, end]);
 
 export function useRedmineWorkspace(today: string) {
+  const queryClient = useQueryClient();
   const initialEnd = today > PERIOD_END ? PERIOD_END : today;
   const [workspace, setWorkspace] = useState<View>();
   const [directory, setDirectory] = useState<Directory>();
@@ -19,7 +21,6 @@ export function useRedmineWorkspace(today: string) {
   const [store, setStore] = useState<AccountStore>(emptyAccounts);
   const storeRef = useRef<AccountStore>(emptyAccounts());
   const source = useRef<Source | null>(null);
-  const cache = useRef(new Map<string, { until: number; view: View }>());
   const epoch = useRef(0);
   const [userId, setUserId] = useState(0);
   const [start, setStart] = useState(PERIOD_START);
@@ -48,9 +49,9 @@ export function useRedmineWorkspace(today: string) {
   const markInvalid = useCallback((id: number) => {
     const old = storeRef.current.accounts[id];
     if (old) saveStore({ ...storeRef.current, accounts: { ...storeRef.current.accounts, [id]: { ...old, status: "invalid" } } });
-    cache.current.clear();
+    queryClient.removeQueries({ queryKey: ["redmine-view"] });
     if (source.current?.account.id === id) source.current = null;
-  }, [saveStore]);
+  }, [queryClient, saveStore]);
 
   const applyView = useCallback((view: View, key: string, cached = false) => {
     setWorkspace(view); setDirectory(view.directory); setUserId(view.userId);
@@ -62,10 +63,9 @@ export function useRedmineWorkspace(today: string) {
       return [...people.values()];
     });
     if (!cached) {
-      if (cache.current.size >= 20) cache.current.delete(cache.current.keys().next().value!);
-      cache.current.set(viewKey(key, view.userId, view.start, view.end), { until: Date.now() + 30_000, view });
+      queryClient.setQueryData(["redmine-view", key, view.userId, view.start, view.end], view);
     }
-  }, []);
+  }, [queryClient]);
 
   useEffect(() => {
     const ticket = ++epoch.current;
@@ -84,13 +84,24 @@ export function useRedmineWorkspace(today: string) {
       if (!candidates.length && legacy) candidates.push({ key: legacy, id: 0 });
       for (const candidate of candidates.slice(0, 1)) {
         try {
+          const requested = window.location.pathname === "/person" ? Number(new URLSearchParams(window.location.search).get("user")) : 0;
+          const targetUserId = Number.isSafeInteger(requested) && requested > 0 ? requested : candidate.id;
+          
+          const cached = targetUserId ? queryClient.getQueryData<View>(["redmine-view", candidate.key, targetUserId, PERIOD_START, initialEnd]) : null;
+          if (cached) {
+            setError("");
+            const account = candidate.id ? saved.accounts[candidate.id] || remember(cached.directory.current, candidate.key) : remember(cached.directory.current, candidate.key);
+            source.current = { account, directory: cached.directory };
+            applyView(cached, candidate.key, true);
+            return;
+          }
+
           const result = await loadWorkspace(candidate.key, initialEnd, PERIOD_START, candidate.id || undefined);
           if (!active || ticket !== epoch.current) return;
           if (result.data) {
             setError("");
             const account = remember(result.data.directory.current, candidate.key);
             source.current = { account, directory: result.data.directory };
-            const requested = window.location.pathname === "/person" ? Number(new URLSearchParams(window.location.search).get("user")) : 0;
             if (Number.isSafeInteger(requested) && requested > 0 && requested !== account.id) {
               const reader = account;
               const target = await loadPerson(reader.key, requested, initialEnd, PERIOD_START, reader.id);
@@ -114,7 +125,7 @@ export function useRedmineWorkspace(today: string) {
       }
     });
     return () => { active = false; };
-  }, [applyView, initialEnd, markInvalid, remember, saveStore]);
+  }, [applyView, initialEnd, markInvalid, queryClient, remember, saveStore]);
 
   function connect(key: string, expectedId = userId) {
     const ticket = ++epoch.current;
@@ -140,11 +151,12 @@ export function useRedmineWorkspace(today: string) {
     setUserId(id); setError("");
     const preferred = source.current?.account.status === "connected" ? source.current.account : Object.values(storeRef.current.accounts).find(account => account.status === "connected");
     if (!preferred) { setWorkspace(undefined); setError("กรุณาเชื่อมต่อ API key อย่างน้อยหนึ่งบัญชีก่อนดูข้อมูล"); return; }
-    const hit = cache.current.get(viewKey(preferred.key, id, nextStart, nextEnd));
-    if (!fresh && hit && hit.until > Date.now()) {
-      source.current = { account: preferred, directory: hit.view.directory };
+    
+    const cached = !fresh ? queryClient.getQueryData<View>(["redmine-view", preferred.key, id, nextStart, nextEnd]) : null;
+    if (cached) {
+      source.current = { account: preferred, directory: cached.directory };
       saveStore({ ...storeRef.current, activeUserId: preferred.id });
-      applyView(hit.view, preferred.key, true);
+      applyView(cached, preferred.key, true);
       return;
     }
     setWorkspace(undefined);
@@ -191,12 +203,12 @@ export function useRedmineWorkspace(today: string) {
     const accounts = { ...storeRef.current.accounts };
     delete accounts[id];
     saveStore({ version: 1, activeUserId: storeRef.current.activeUserId === id ? null : storeRef.current.activeUserId, accounts });
-    cache.current.clear();
+    queryClient.removeQueries({ queryKey: ["redmine-view"] });
     if (source.current?.account.id === id) { ++epoch.current; source.current = null; setWorkspace(undefined); }
   }
 
   function signOut() {
-    ++epoch.current; source.current = null; cache.current.clear();
+    ++epoch.current; source.current = null; queryClient.clear();
     setWorkspace(undefined); setDirectory(undefined); setCatalog([]); setPermissions({}); setUserId(0); setError("");
     saveStore(emptyAccounts(), false);
     try { localStorage.removeItem(ACCOUNTS_STORAGE); localStorage.removeItem(LEGACY_KEY_STORAGE); }

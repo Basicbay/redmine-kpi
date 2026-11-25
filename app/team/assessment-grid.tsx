@@ -15,7 +15,13 @@ function Metric({ value, unit, detail, tone, digits = 0 }: { value?: number | nu
   return <div className={`grid-metric ${tone || ""}`}><strong>{format(value, digits)}{value != null && unit && <span>{unit}</span>}</strong>{value != null && detail && <small>{detail}</small>}</div>;
 }
 
-export default function AssessmentGrid({ data }: { data: GridPerson[] }) {
+export default function AssessmentGrid({
+  data,
+  onSelectPerson,
+}: {
+  data: GridPerson[];
+  onSelectPerson?: (id: number) => void;
+}) {
   const [sorting, setSorting] = useState<SortingState>([{ id: "total", desc: true }]);
   const topScroll = useRef<HTMLDivElement>(null);
   const topContent = useRef<HTMLDivElement>(null);
@@ -37,7 +43,25 @@ export default function AssessmentGrid({ data }: { data: GridPerson[] }) {
   const columns = useMemo(() => {
     const stat = (id: keyof NonNullable<AssessmentRow["stats"]>, header: string, unit?: string, tone?: string, detail?: (r: GridPerson) => string) => helper.accessor(row => row.stats?.[id] ?? undefined, { id, header, sortUndefined: "last", cell: c => <Metric value={c.getValue()} unit={unit} tone={tone} detail={detail?.(c.row.original)} /> });
     return helper.columns([
-      helper.accessor("name", { header: "รายชื่อ", sortDescFirst: false, sortFn: (a, b) => a.original.name.localeCompare(b.original.name, "th"), cell: c => <Link className="grid-person-name" href={`/person?user=${c.row.original.id}`}>{c.getValue()}</Link> }),
+      helper.accessor("name", {
+        header: "รายชื่อ",
+        sortDescFirst: false,
+        sortFn: (a, b) => a.original.name.localeCompare(b.original.name, "th"),
+        cell: (c) => (
+          <Link
+            className="grid-person-name"
+            href={`/person?user=${c.row.original.id}`}
+            onClick={(e) => {
+              if (onSelectPerson && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+                e.preventDefault();
+                onSelectPerson(c.row.original.id);
+              }
+            }}
+          >
+            {c.getValue()}
+          </Link>
+        ),
+      }),
       helper.accessor(row => row.level ? ratingRank[row.level] : undefined, { id: "level", header: "ระดับผลประเมิน", sortUndefined: "last", cell: c => { const rank = c.getValue(); return rank === undefined ? "—" : <span className={`rating-level rating-level-${rank}`} title={c.row.original.preliminary ? "ระดับเบื้องต้นจากคะแนนที่มีข้อมูลในระบบ" : undefined}>{ratingLevels[rank - 1]}</span>; } }),
       helper.accessor("total", { header: () => <span className="grid-score-heading">คะแนนรวม<small>เต็ม 100</small></span>, sortUndefined: "last", cell: c => <Metric value={c.getValue()} tone="grid-score-total" digits={3} /> }),
       helper.accessor("performance", { header: () => <span className="grid-score-heading">ผลงาน<small>เต็ม 60</small></span>, sortUndefined: "last", cell: c => <Metric value={c.getValue()} tone="grid-score-performance" digits={3} /> }),

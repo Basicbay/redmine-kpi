@@ -8,8 +8,15 @@ import AssessmentPanel from "./assessment-panel";
 import { filterTasksByStatus, type TaskStatus } from "@/lib/task-filters";
 import { useRedmineWorkspace } from "./use-redmine-workspace";
 
-export default function Dashboard({ today }: { today: string }) {
-  const state = useRedmineWorkspace(today);
+export default function Dashboard({
+  today,
+  sharedWorkspace,
+}: {
+  today: string;
+  sharedWorkspace?: ReturnType<typeof useRedmineWorkspace>;
+}) {
+  const internalState = useRedmineWorkspace(today);
+  const state = sharedWorkspace || internalState;
   const {
     workspace,
     directory,
